@@ -57,7 +57,7 @@ When the user wants to connect a new app, do not start a hosted session from cha
 
 If the ClawLink tools are not visible in the current Hermes session, the plugin has not been installed or paired yet.
 
-1. Tell the user to run `hermes plugins install claw-link/clawlink-hermes-plugin --enable` (one-time install).
+1. Tell the user to run `hermes plugins install claw-link/hermes-plugin --enable` (one-time install).
 2. Then run `hermes clawlink setup` (pairs this device — the user approves in the browser).
 3. After setup, the user should run `/reload-mcp` in the active chat or start a fresh Hermes session so the tool catalog refreshes.
 

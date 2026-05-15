@@ -31,12 +31,12 @@ classifiers = [
 [project.urls]
 Homepage = "https://claw-link.dev"
 Documentation = "https://docs.claw-link.dev/hermes"
-Repository = "https://github.com/claw-link/clawlink-hermes-plugin"
-Issues = "https://github.com/claw-link/clawlink-hermes-plugin/issues"
+Repository = "https://github.com/claw-link/hermes-plugin"
+Issues = "https://github.com/claw-link/hermes-plugin/issues"
 
 # Hermes auto-discovers plugins registered under this entry-point group.
 # `pip install clawlink-hermes-plugin` is an alternative to
-# `hermes plugins install claw-link/clawlink-hermes-plugin`.
+# `hermes plugins install claw-link/hermes-plugin`.
 [project.entry-points."hermes_agent.plugins"]
 clawlink = "clawlink_hermes_plugin"
 

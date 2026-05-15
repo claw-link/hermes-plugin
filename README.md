@@ -14,7 +14,7 @@ The plugin is the recommended install path because it avoids `curl … | python3
 ## Install
 
 ```bash
-hermes plugins install claw-link/clawlink-hermes-plugin --enable
+hermes plugins install claw-link/hermes-plugin --enable
 hermes clawlink setup
 ```
 
@@ -79,7 +79,7 @@ Existing config is backed up to `config.yaml.bak.<timestamp>` before any change.
 
 ## Development
 
-This package mirrors the production code at [`hith3sh/clawlink`](https://github.com/hith3sh/clawlink) under `packages/clawlink-hermes-plugin/`. Releases are cut from this repo (`claw-link/clawlink-hermes-plugin`) so `hermes plugins install` can fetch them directly from GitHub.
+This package mirrors the production code at [`hith3sh/clawlink`](https://github.com/hith3sh/clawlink) under `packages/clawlink-hermes-plugin/`. Releases are cut from this repo (`claw-link/hermes-plugin`) so `hermes plugins install` can fetch them directly from GitHub.
 
 To test locally without publishing:
 
