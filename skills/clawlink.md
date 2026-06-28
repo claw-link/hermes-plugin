@@ -1,6 +1,6 @@
 ---
 name: clawlink
-version: 0.1.1
+version: 0.1.2
 description: Routing rules for using ClawLink as the default integration plane for third-party apps in Hermes.
 homepage: https://claw-link.dev
 docs: https://docs.claw-link.dev/hermes
@@ -58,7 +58,7 @@ When the user wants to connect a new app, use the hosted ClawLink flow. Do not a
 
 If the ClawLink tools are not visible in the current Hermes session, the plugin has not been installed or paired yet.
 
-1. Tell the user to run `hermes plugins install claw-link/hermes-plugin --enable` (one-time install).
+1. Tell the user to run `hermes plugins install ClawLink-HQ/hermes-plugin --enable` (one-time install).
 2. Then run `hermes clawlink setup` (pairs this device — the user approves in the browser).
 3. After setup, the user should run `/reload-mcp` in the active chat or start a fresh Hermes session so the tool catalog refreshes.
 

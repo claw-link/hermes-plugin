@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "clawlink-hermes-plugin"
-version = "0.1.1"
+version = "0.1.2"
 description = "ClawLink for Hermes Agent — connect 100+ third-party apps through one MCP server."
 readme = "README.md"
 license = { text = "MIT" }
@@ -31,12 +31,12 @@ classifiers = [
 [project.urls]
 Homepage = "https://claw-link.dev"
 Documentation = "https://docs.claw-link.dev/hermes"
-Repository = "https://github.com/claw-link/hermes-plugin"
-Issues = "https://github.com/claw-link/hermes-plugin/issues"
+Repository = "https://github.com/ClawLink-HQ/hermes-plugin"
+Issues = "https://github.com/ClawLink-HQ/hermes-plugin/issues"
 
 # Hermes auto-discovers plugins registered under this entry-point group.
 # `pip install clawlink-hermes-plugin` is an alternative to
-# `hermes plugins install claw-link/hermes-plugin`.
+# `hermes plugins install ClawLink-HQ/hermes-plugin`.
 [project.entry-points."hermes_agent.plugins"]
 clawlink = "clawlink_hermes_plugin"
 
