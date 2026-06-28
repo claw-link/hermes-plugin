@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.1.1"
 DEFAULT_BASE_URL = "https://claw-link.dev"
 MIN_EXPECTED_TOOLS = 10
 POLL_TIMEOUT_SECONDS = 15 * 60

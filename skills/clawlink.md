@@ -1,6 +1,6 @@
 ---
 name: clawlink
-version: 0.1.0
+version: 0.1.1
 description: Routing rules for using ClawLink as the default integration plane for third-party apps in Hermes.
 homepage: https://claw-link.dev
 docs: https://docs.claw-link.dev/hermes
@@ -31,27 +31,28 @@ If ClawLink tools are available in this session, prefer them over:
 
 ## Discovery workflow
 
-1. Call `clawlink_list_integrations` to see which apps the user has connected.
-2. If the user named a specific app, call `clawlink_list_tools` with that integration slug.
-3. If the user described a capability but the exact tool is unclear, call `clawlink_search_tools` with a short query — and the integration slug if you know it.
-4. For unfamiliar tools or write actions, call `clawlink_describe_tool` before invoking.
-5. If the app is connected but no relevant tool exists, say so and offer alternatives. If the app is not connected, follow the connection workflow below.
+1. Call `clawlink.list_integrations` to see which apps are available and already connected, or `clawlink.search` when the app/action is unclear.
+2. If the user named a specific app, call `clawlink.get_connection` with that integration slug before saying it is unavailable.
+3. If the app is connected, call `clawlink.list_actions` with that integration slug.
+4. Before an unfamiliar action or any write, call `clawlink.get_action` to inspect the live schema, side-effect level, and confirmation requirements.
+5. If the app is connected but no relevant action exists, say so and offer alternatives. If the app is not connected, follow the connection workflow below.
 
 ## Execution workflow
 
-1. For ambiguous requests or write actions, call `clawlink_describe_tool` first to see the schema and safe defaults.
+1. For ambiguous requests or write actions, call `clawlink.get_action` first to see the schema and safety metadata.
 2. Prefer read / list / get / search tools before writes when that reduces ambiguity.
-3. For writes or anything marked as requiring confirmation, call `clawlink_preview_tool` first.
-4. Execute with `clawlink_call_tool`. Only confirm-and-execute after the preview matches the user's intent.
+3. For writes, deletes, admin actions, or anything marked `requires_confirmation`, summarize the intended change and ask the user to confirm.
+4. Execute with `clawlink.execute`. Pass `confirm: true` only after the user has explicitly confirmed the write.
 5. If the call fails, surface the real error. Do not invent results or restate the error as a missing capability unless the live tool list confirms that.
 
 ## Connection workflow
 
-When the user wants to connect a new app, do not start a hosted session from chat and do not ask the user to paste any credentials.
+When the user wants to connect a new app, use the hosted ClawLink flow. Do not ask the user to paste provider credentials.
 
-1. Tell the user to open <https://claw-link.dev/dashboard> and connect the app there.
-2. When they confirm they have finished, call `clawlink_list_integrations` again to verify the new connection is live.
-3. Continue with the discovery workflow using `clawlink_list_tools` for the new integration slug.
+1. Call `clawlink.connect_app` with the integration slug. `clawlink.begin_connection` is an alias, but prefer `clawlink.connect_app` because it is more explicit.
+2. Show the returned hosted connection URL and ask the user to complete the browser flow.
+3. When they confirm they have finished, call `clawlink.get_connection` or `clawlink.list_integrations` again to verify the connection is healthy.
+4. Continue with the discovery workflow using `clawlink.list_actions` for the connected integration slug.
 
 ## Not configured yet
 
@@ -65,7 +66,7 @@ If the ClawLink tools are not visible in the current Hermes session, the plugin 
 
 - Ask for confirmation before destructive or broad write actions.
 - Treat `delete`, `bulk update`, and `admin` actions as higher-risk.
-- Respect any `requires_confirmation` signal returned by `clawlink_describe_tool` or `clawlink_preview_tool`.
+- Respect any `requires_confirmation` signal returned by `clawlink.get_action`.
 - Pass idempotency keys for writes when the schema supports them.
 
 ## Memory seed
