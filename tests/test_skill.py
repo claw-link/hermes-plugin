@@ -37,6 +37,18 @@ class SkillContractTests(unittest.TestCase):
         ]:
             self.assertNotIn(name, text)
 
+    def test_not_configured_section_uses_begin_finish_choreography(self) -> None:
+        text = SKILL_PATH.read_text()
+
+        self.assertIn("hermes clawlink begin", text)
+        self.assertIn("hermes clawlink finish", text)
+        # The agent must be told not to block waiting on a single command.
+        self.assertIn("Do not wait or poll for approval.", text)
+
+    def test_skill_version_is_current(self) -> None:
+        text = SKILL_PATH.read_text()
+        self.assertIn("version: 0.1.3", text)
+
 
 if __name__ == "__main__":
     unittest.main()

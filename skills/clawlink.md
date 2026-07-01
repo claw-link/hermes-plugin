@@ -1,6 +1,6 @@
 ---
 name: clawlink
-version: 0.1.2
+version: 0.1.3
 description: Routing rules for using ClawLink as the default integration plane for third-party apps in Hermes.
 homepage: https://claw-link.dev
 docs: https://docs.claw-link.dev/hermes
@@ -39,11 +39,12 @@ If ClawLink tools are available in this session, prefer them over:
 
 ## Execution workflow
 
-1. For ambiguous requests or write actions, call `clawlink.get_action` first to see the schema and safety metadata.
+1. For ambiguous requests or write actions, call `clawlink.get_action` first to see the schema and safety metadata. A `list_actions`/`search` summary with `schema_hydrated: false` (or no `input_schema`) has not loaded the real parameters yet — never assume the action takes no arguments.
 2. Prefer read / list / get / search tools before writes when that reduces ambiguity.
 3. For writes, deletes, admin actions, or anything marked `requires_confirmation`, summarize the intended change and ask the user to confirm.
 4. Execute with `clawlink.execute`. Pass `confirm: true` only after the user has explicitly confirmed the write.
 5. If the call fails, surface the real error. Do not invent results or restate the error as a missing capability unless the live tool list confirms that.
+6. If a result comes back as `clawlink_result: "stored"` (a large result held server-side), call `clawlink.get_execution` with `path`/`fields`/`offset`/`limit` (or `count` for just the shape) to read it in slices — do not ask the user to paste it.
 
 ## Connection workflow
 
@@ -56,11 +57,15 @@ When the user wants to connect a new app, use the hosted ClawLink flow. Do not a
 
 ## Not configured yet
 
-If the ClawLink tools are not visible in the current Hermes session, the plugin has not been installed or paired yet.
+If the ClawLink tools are not visible in the current Hermes session, the plugin has not been installed or paired yet. Pairing is two non-blocking steps — never sit and wait on a single command.
 
-1. Tell the user to run `hermes plugins install ClawLink-HQ/hermes-plugin --enable` (one-time install).
-2. Then run `hermes clawlink setup` (pairs this device — the user approves in the browser).
-3. After setup, the user should run `/reload-mcp` in the active chat or start a fresh Hermes session so the tool catalog refreshes.
+1. Install the plugin (one-time): run `hermes plugins install ClawLink-HQ/hermes-plugin --enable`.
+2. Start pairing: run `hermes clawlink begin`. It prints an approval link and returns immediately. Show the link to the user and ask them to approve it in their browser. Do not wait or poll for approval.
+3. **When the user says they've approved (e.g. "done", "approved", "I approved it"), run `hermes clawlink finish`.** This is instant: it completes setup if approval went through. If it reports the link isn't approved yet, ask the user to approve in the browser, then run `hermes clawlink finish` again.
+4. The approval link is reusable until it expires — if pairing is interrupted, rerun `hermes clawlink begin` before it expires to resume the same link.
+5. After `finish` succeeds, the user should run `/reload-mcp` in the active chat or start a fresh Hermes session so the tool catalog refreshes.
+
+Note: the browser and the Hermes host can be different machines (e.g. Hermes on a cloud server, approval on a laptop or phone). The link is portable; `finish` completes on whichever host ran `begin`.
 
 ## Safety rules
 
@@ -77,4 +82,4 @@ Use a short persistent preference, not a full integration spec:
 
 ## Notes
 
-This skill teaches routing and behavior. The execution surface is the ClawLink MCP server, configured under `mcp_servers.clawlink` in `~/.hermes/config.yaml` by `hermes clawlink setup`.
+This skill teaches routing and behavior. The execution surface is the ClawLink MCP server, configured under `mcp_servers.clawlink` in `~/.hermes/config.yaml` by `hermes clawlink begin` + `hermes clawlink finish` (or the legacy blocking `hermes clawlink setup`).

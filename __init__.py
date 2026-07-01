@@ -1,12 +1,15 @@
 """ClawLink Hermes plugin entry point.
 
 Registers:
-  * `hermes clawlink {setup|test|repair|status}` — CLI subcommands.
-  * `/clawlink {setup|test|status}` — in-session slash command.
+  * `hermes clawlink {begin|finish|setup|test|repair|status}` — CLI subcommands.
+  * `/clawlink {begin|finish|setup|test|status}` — in-session slash command.
   * A bundled routing skill (``clawlink:clawlink``) that teaches the agent
     when to prefer ClawLink for third-party app interactions.
 
-The actual install / pairing logic lives in ``bootstrap.py``.
+`begin` + `finish` are the non-blocking, agent-driven pairing path: `begin`
+prints the approval link and returns; once the user approves and says they're
+done, the agent runs `finish` to complete. `setup` is the legacy blocking path
+kept for terminal users. The actual logic lives in ``bootstrap.py``.
 """
 
 from __future__ import annotations
@@ -22,7 +25,9 @@ PLUGIN_VERSION = bootstrap.PLUGIN_VERSION
 def _slash_help() -> str:
     return (
         "Usage:\n"
-        "  /clawlink setup    Pair this Hermes with your ClawLink account.\n"
+        "  /clawlink begin    Start pairing: print the approval link (no wait).\n"
+        "  /clawlink finish   Finish pairing after you approve in the browser.\n"
+        "  /clawlink setup    Pair in one blocking step (terminal use).\n"
         "  /clawlink test     Run `hermes mcp test clawlink`.\n"
         "  /clawlink status   Show whether ClawLink is configured.\n"
         "  /clawlink repair   Rotate the local ClawLink token."
@@ -36,7 +41,15 @@ def register(ctx) -> None:
     def _setup_cli(parser) -> None:
         sub = parser.add_subparsers(dest="action")
         sub.add_parser(
-            "setup", help="Pair Hermes with your ClawLink account"
+            "begin",
+            help="Start pairing: print the approval link and exit (no wait)",
+        )
+        sub.add_parser(
+            "finish",
+            help="Finish pairing after you approve in the browser",
+        )
+        sub.add_parser(
+            "setup", help="Pair Hermes with your ClawLink account (blocking)"
         )
         sub.add_parser(
             "test",
@@ -53,6 +66,10 @@ def register(ctx) -> None:
 
     def _handle_cli(args) -> int:
         action = getattr(args, "action", None) or "setup"
+        if action == "begin":
+            return bootstrap.run_begin()
+        if action == "finish":
+            return bootstrap.run_finish()
         if action == "setup":
             return bootstrap.run_setup()
         if action == "repair":
@@ -66,7 +83,7 @@ def register(ctx) -> None:
 
     ctx.register_cli_command(
         name=PLUGIN_NAME,
-        help="Manage ClawLink integration (pair, test, repair)",
+        help="Manage ClawLink integration (begin, finish, pair, test, repair)",
         setup_fn=_setup_cli,
         handler_fn=_handle_cli,
     )
@@ -78,6 +95,24 @@ def register(ctx) -> None:
 
         if verb in {"help", "-h", "--help", "?"}:
             return _slash_help()
+        if verb == "begin":
+            code = bootstrap.run_begin()
+            return (
+                "Approval link printed above. Open it, approve in your browser, "
+                "then tell me you're done and I'll run `/clawlink finish`."
+                if code == 0
+                else "Could not start ClawLink pairing. See the log lines above."
+            )
+        if verb == "finish":
+            code = bootstrap.run_finish()
+            return (
+                "ClawLink setup complete. Start a new chat or run "
+                "/reload-mcp to use ClawLink tools."
+                if code == 0
+                else "ClawLink isn't ready yet. If you haven't approved the "
+                "link, approve it in your browser, then run `/clawlink finish` "
+                "again."
+            )
         if verb == "setup":
             code = bootstrap.run_setup()
             return (

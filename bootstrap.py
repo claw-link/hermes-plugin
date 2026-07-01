@@ -29,6 +29,8 @@ __all__ = [
     "DEFAULT_BASE_URL",
     "PLUGIN_VERSION",
     "USER_AGENT",
+    "run_begin",
+    "run_finish",
     "run_setup",
     "run_test",
     "run_status",
@@ -36,12 +38,14 @@ __all__ = [
 ]
 
 
-PLUGIN_VERSION = "0.1.2"
+PLUGIN_VERSION = "0.1.3"
 DEFAULT_BASE_URL = "https://claw-link.dev"
 MIN_EXPECTED_TOOLS = 10
 POLL_TIMEOUT_SECONDS = 15 * 60
 POLL_INTERVAL_SECONDS = 3
+PENDING_SESSION_FILENAME = "clawlink-bootstrap-session.json"
 USER_AGENT = f"clawlink-hermes-plugin/{PLUGIN_VERSION}"
+REDACTED_SECRET = "[REDACTED]"
 
 
 # ---------------------------------------------------------------------------
@@ -49,13 +53,41 @@ USER_AGENT = f"clawlink-hermes-plugin/{PLUGIN_VERSION}"
 # ---------------------------------------------------------------------------
 
 
+def _redact_clawlink_secrets(text: str) -> str:
+    redacted = re.sub(
+        r'(?i)(x-clawlink-api-key\s*[:=]\s*["\'])[^"\r\n]+(["\'])',
+        rf"\1{REDACTED_SECRET}\2",
+        text,
+    )
+    redacted = re.sub(
+        r'(?i)(x-clawlink-api-key\s*[:=]\s*)(?!["\'])[^\s,]+',
+        rf"\1{REDACTED_SECRET}",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(authorization\s*[:=]\s*bearer\s*)cllk_live_[A-Za-z0-9._-]+",
+        rf"\1{REDACTED_SECRET}",
+        redacted,
+    )
+    redacted = re.sub(
+        r"\bcllk_live_[A-Za-z0-9._-]+\b",
+        "cllk_live_[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
 def _log(message: str) -> None:
-    print(f"[clawlink] {message}", flush=True)
+    print(f"[clawlink] {_redact_clawlink_secrets(message)}", flush=True)
 
 
 class BootstrapError(RuntimeError):
     """Raised when bootstrap cannot continue. Surfaces a clean message to the
     Hermes CLI / chat session instead of a Python traceback."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
 
 
 # ---------------------------------------------------------------------------
@@ -140,11 +172,15 @@ def _request_json(method: str, url: str, payload: dict | None = None) -> dict:
             message = json.loads(body).get("error") or body
         except Exception:
             message = body
-        raise BootstrapError(f"{method} {url} failed: {message}") from error
+        raise BootstrapError(
+            f"{method} {url} failed: {message}",
+            retryable=error.code in {408, 429, 500, 502, 503, 504},
+        ) from error
     except urllib.error.URLError as error:
         raise BootstrapError(
             f"Could not reach ClawLink at {url}: {error.reason}. "
-            "Check your network connection and try again."
+            "Check your network connection and try again.",
+            retryable=True,
         ) from error
 
 
@@ -168,13 +204,146 @@ def _create_bootstrap_session(base_url: str, hermes: str | None) -> dict:
     return session
 
 
+def _pending_session_path(hermes_home: Path) -> Path:
+    return hermes_home / PENDING_SESSION_FILENAME
+
+
+def _parse_iso_datetime(value: object) -> dt.datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _pending_session_is_expired(session: dict) -> bool:
+    expires_at = _parse_iso_datetime(session.get("expires_at"))
+    if expires_at is None:
+        return True
+    return expires_at <= dt.datetime.now(dt.timezone.utc)
+
+
+def _save_pending_session(hermes_home: Path, base_url: str, session: dict) -> None:
+    session_id = session.get("session_id")
+    approval_url = session.get("approval_url")
+    poll_url = session.get("poll_url")
+    expires_at = session.get("expires_at")
+    required_values = (session_id, approval_url, poll_url, expires_at)
+    if not all(isinstance(value, str) and value for value in required_values):
+        return
+
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    path = _pending_session_path(hermes_home)
+    payload = {
+        "base_url": base_url,
+        "session_id": session_id,
+        "approval_url": approval_url,
+        "poll_url": poll_url,
+        "expires_at": expires_at,
+        "created_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+    }
+    temp_path = path.with_suffix(".json.tmp")
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    temp_path.replace(path)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _clear_pending_session(hermes_home: Path) -> None:
+    try:
+        _pending_session_path(hermes_home).unlink()
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        _log(f"Could not clear pending ClawLink approval cache: {error}")
+
+
+def _load_pending_session(hermes_home: Path, base_url: str) -> dict | None:
+    path = _pending_session_path(hermes_home)
+    try:
+        session = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except Exception:
+        _clear_pending_session(hermes_home)
+        return None
+
+    if not isinstance(session, dict):
+        _clear_pending_session(hermes_home)
+        return None
+
+    required_fields = ("session_id", "approval_url", "poll_url", "expires_at")
+    if session.get("base_url") != base_url or not all(
+        isinstance(session.get(field), str) and session.get(field)
+        for field in required_fields
+    ):
+        _clear_pending_session(hermes_home)
+        return None
+
+    if _pending_session_is_expired(session):
+        _clear_pending_session(hermes_home)
+        return None
+
+    return session
+
+
+def _get_resumable_session(hermes_home: Path, base_url: str) -> dict | None:
+    session = _load_pending_session(hermes_home, base_url)
+    if not session:
+        return None
+
+    try:
+        data = _request_json("GET", session["poll_url"])
+    except BootstrapError as error:
+        if error.retryable:
+            _log(
+                "Could not verify the saved ClawLink approval right now. "
+                "Retrying the same saved session."
+            )
+            session["resumed"] = True
+            return session
+        _clear_pending_session(hermes_home)
+        return None
+
+    status = data.get("status")
+    if status in {"pending_approval", "approved"}:
+        session["resumed"] = True
+        return session
+
+    _clear_pending_session(hermes_home)
+    return None
+
+
 def _poll_for_approval(poll_url: str) -> dict:
     deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
     last_progress = 0.0
+    last_retry_notice = 0.0
     _log("Waiting for approval...")
 
     while time.monotonic() < deadline:
-        data = _request_json("GET", poll_url)
+        try:
+            data = _request_json("GET", poll_url)
+        except BootstrapError as error:
+            if not error.retryable:
+                raise
+
+            now = time.monotonic()
+            if now - last_retry_notice >= 6:
+                _log(
+                    "Could not reach ClawLink while waiting for approval. "
+                    "Retrying..."
+                )
+                last_retry_notice = now
+                last_progress = now
+            time.sleep(POLL_INTERVAL_SECONDS)
+            continue
+
         status = data.get("status")
 
         if status == "approved" and data.get("install"):
@@ -215,6 +384,19 @@ def _consume_session(base_url: str, session_id: str) -> None:
         )
     except Exception as error:  # noqa: BLE001 — non-fatal
         _log(f"Could not mark bootstrap session consumed: {error}")
+
+
+def _describe_expiry(session: dict) -> str | None:
+    expires_at = _parse_iso_datetime(session.get("expires_at"))
+    if expires_at is None:
+        return None
+    remaining = expires_at - dt.datetime.now(dt.timezone.utc)
+    minutes = max(0, round(remaining.total_seconds() / 60))
+    if minutes <= 0:
+        return "less than 1 minute"
+    if minutes == 1:
+        return "about 1 minute"
+    return f"about {minutes} minutes"
 
 
 # ---------------------------------------------------------------------------
@@ -428,8 +610,190 @@ def _resolved_base_url() -> str:
     return os.environ.get("CLAWLINK_BASE_URL", DEFAULT_BASE_URL).rstrip("/")
 
 
+def _existing_config_ok(hermes: str, config_path: Path, *, repair: bool) -> bool:
+    """True when a healthy ClawLink config already exists and pairing can stop.
+
+    Shared by the blocking ``setup`` path and the non-blocking ``begin`` path so
+    neither re-pairs a device that is already working (unless ``repair``).
+    """
+    if repair or not _config_has_clawlink(config_path):
+        return False
+    _log("Existing ClawLink config found; validating")
+    if _run_mcp_test(hermes):
+        _log(
+            "ClawLink is already installed. Run "
+            "`hermes clawlink repair` to rotate the token."
+        )
+        return True
+    _log("Existing config did not pass validation; repairing")
+    return False
+
+
+def _emit_begin(
+    hermes_home: Path, base_url: str, hermes: str | None, *, repair: bool
+) -> dict:
+    """Create or resume a bootstrap session, persist it, and print the link.
+
+    Returns the session dict. Does NOT poll — both ``begin`` (returns straight
+    after) and ``setup`` (polls next) build on this.
+    """
+    session = None if repair else _get_resumable_session(hermes_home, base_url)
+    if session:
+        _log("Resuming pending ClawLink approval")
+    else:
+        session = _create_bootstrap_session(base_url, hermes)
+        _save_pending_session(hermes_home, base_url, session)
+
+    _log(f"Approval required: {session['approval_url']}")
+    expires_in = _describe_expiry(session)
+    if expires_in:
+        _log(
+            "This link is reusable until it expires. If pairing is interrupted, "
+            f"rerun within {expires_in} to resume."
+        )
+    return session
+
+
+def _complete_from_install(
+    hermes: str,
+    hermes_home: Path,
+    base_url: str,
+    session: dict,
+    install: dict,
+) -> int:
+    """Write the config, consume the session, clear the pending file, and test.
+
+    Shared completion step for ``setup`` (after its poll) and ``finish`` (after
+    its single status fetch). Returns a process-style exit code.
+    """
+    try:
+        _write_config(hermes_home, install)
+    except Exception as error:
+        raise BootstrapError(f"Config write failed: {error}") from error
+
+    _consume_session(base_url, session["session_id"])
+    _clear_pending_session(hermes_home)
+
+    if not _run_mcp_test(hermes):
+        _log(
+            "Setup wrote the config but MCP verification failed. "
+            "Run `hermes clawlink repair` after checking the error above."
+        )
+        return 1
+
+    _log(
+        "Run /reload-mcp in active Hermes chats, or start a new Hermes "
+        "session, to use ClawLink."
+    )
+    _log("Done")
+    return 0
+
+
+def run_begin(*, repair: bool = False) -> int:
+    """Start pairing without blocking: create the session, print the approval
+    link, and return immediately. The user approves in the browser, then the
+    agent runs ``run_finish`` to complete — so nothing has to stay alive across
+    the human approval delay.
+
+    Returns a process-style exit code (0 on success, non-zero on failure).
+    """
+    base_url = _resolved_base_url()
+    try:
+        hermes = _find_hermes()
+        hermes_home = _hermes_home()
+        config_path = hermes_home / "config.yaml"
+
+        if _existing_config_ok(hermes, config_path, repair=repair):
+            return 0
+
+        _ensure_mcp_importable()
+
+        _emit_begin(hermes_home, base_url, hermes, repair=repair)
+
+        _log(
+            "After you approve in the browser, come back to Hermes and tell it "
+            "you're done. Hermes then runs `hermes clawlink finish` to complete "
+            "setup."
+        )
+        return 0
+    except BootstrapError as error:
+        _log(str(error))
+        return 1
+
+
+def run_finish() -> int:
+    """Complete a pairing started by ``run_begin``. Does a single status fetch
+    (no long poll). If approved, writes the config and verifies; if still
+    waiting, asks the user to approve first and leaves the saved session intact
+    so a retry works.
+
+    Returns a process-style exit code (0 on success, non-zero otherwise).
+    """
+    base_url = _resolved_base_url()
+    try:
+        hermes = _find_hermes()
+        hermes_home = _hermes_home()
+
+        session = _load_pending_session(hermes_home, base_url)
+        if not session:
+            raise BootstrapError(
+                "No pending ClawLink approval found. Run `hermes clawlink begin` "
+                "to start pairing."
+            )
+
+        # Single fetch against the installer route (carries the install payload
+        # with the raw key once approved) — never the browser status route.
+        data = _request_json("GET", session["poll_url"])
+        status = data.get("status")
+
+        if status == "approved" and data.get("install"):
+            _log("Approval received")
+            return _complete_from_install(
+                hermes, hermes_home, base_url, session, data["install"]
+            )
+
+        if status in {"pending_approval", "approved"}:
+            # Still waiting (or approved but the install payload hasn't landed
+            # yet). Keep the saved session so the next `finish` succeeds.
+            _log(
+                "Not approved yet. Open the approval link, approve in the "
+                "browser, then tell Hermes you're done."
+            )
+            _log(f"Approval link: {session['approval_url']}")
+            return 1
+
+        if status == "expired":
+            _clear_pending_session(hermes_home)
+            raise BootstrapError(
+                "Approval expired. Run `hermes clawlink begin` again to "
+                "generate a new link."
+            )
+        if status == "rejected":
+            _clear_pending_session(hermes_home)
+            raise BootstrapError(
+                "Approval was canceled. Run `hermes clawlink begin` again "
+                "when you are ready."
+            )
+        if status == "consumed":
+            _clear_pending_session(hermes_home)
+            raise BootstrapError(
+                "This approval was already used. Run "
+                "`hermes clawlink repair` to generate a fresh link."
+            )
+
+        _log(f"Unexpected approval status: {status}. Try again in a moment.")
+        return 1
+    except BootstrapError as error:
+        _log(str(error))
+        return 1
+
+
 def run_setup(*, repair: bool = False) -> int:
     """Pair Hermes with a ClawLink account and write the MCP config.
+
+    Blocking, terminal-oriented path: prints the link and then polls until the
+    user approves. Retained for real terminal users; agent-driven pairing should
+    use the non-blocking ``run_begin`` / ``run_finish`` pair instead.
 
     Returns a process-style exit code (0 on success, non-zero on failure) so
     the CLI handler can propagate it to ``sys.exit``.
@@ -440,42 +804,23 @@ def run_setup(*, repair: bool = False) -> int:
         hermes_home = _hermes_home()
         config_path = hermes_home / "config.yaml"
 
-        if _config_has_clawlink(config_path) and not repair:
-            _log("Existing ClawLink config found; validating")
-            if _run_mcp_test(hermes):
-                _log(
-                    "ClawLink is already installed. Run "
-                    "`hermes clawlink repair` to rotate the token."
-                )
-                return 0
-            _log("Existing config did not pass validation; repairing")
+        if _existing_config_ok(hermes, config_path, repair=repair):
+            return 0
 
         _ensure_mcp_importable()
 
-        session = _create_bootstrap_session(base_url, hermes)
-        _log(f"Approval required: {session['approval_url']}")
-        install = _poll_for_approval(session["poll_url"])
+        session = _emit_begin(hermes_home, base_url, hermes, repair=repair)
 
         try:
-            _write_config(hermes_home, install)
-        except Exception as error:
-            raise BootstrapError(f"Config write failed: {error}") from error
+            install = _poll_for_approval(session["poll_url"])
+        except BootstrapError as error:
+            message = str(error).lower()
+            terminal_words = ("expired", "timed out", "canceled", "already used")
+            if any(word in message for word in terminal_words):
+                _clear_pending_session(hermes_home)
+            raise
 
-        _consume_session(base_url, session["session_id"])
-
-        if not _run_mcp_test(hermes):
-            _log(
-                "Setup wrote the config but MCP verification failed. "
-                "Run `hermes clawlink repair` after checking the error above."
-            )
-            return 1
-
-        _log(
-            "Run /reload-mcp in active Hermes chats, or start a new Hermes "
-            "session, to use ClawLink."
-        )
-        _log("Done")
-        return 0
+        return _complete_from_install(hermes, hermes_home, base_url, session, install)
     except BootstrapError as error:
         _log(str(error))
         return 1

@@ -13,20 +13,27 @@ The plugin is the recommended install path because it avoids `curl … | python3
 
 ## Install
 
+Pairing is two non-blocking steps, so nothing has to stay alive while you approve in the browser:
+
 ```bash
 hermes plugins install ClawLink-HQ/hermes-plugin --enable
-hermes clawlink setup
+hermes clawlink begin
+# approve the printed link in your browser, then:
+hermes clawlink finish
 ```
 
-`setup` will:
+This is the recommended path when an agent runs the commands for you: `begin` prints the link and returns right away, you approve, then `finish` completes instantly. The browser and the Hermes host can be different machines — the link is portable, and `finish` completes on whichever host ran `begin` (e.g. Hermes on a cloud server, approval on your laptop or phone).
+
+Pairing will:
 
 1. Check whether ClawLink is already configured. If so, validate it and exit.
-2. Create a one-time approval session and print a URL.
-3. Wait for you to approve the device in your browser (sign in to ClawLink if needed).
-4. Write `mcp_servers.clawlink` into `~/.hermes/config.yaml` with a scoped MCP token.
-5. Run `hermes mcp test clawlink` to verify the install.
+2. (`begin`) Create a one-time approval session and print a URL. If pairing is interrupted, rerun `hermes clawlink begin` before the link expires to resume the same approval session.
+3. You approve the device in your browser (sign in to ClawLink if needed).
+4. (`finish`) Write `mcp_servers.clawlink` into `~/.hermes/config.yaml` with a scoped MCP token and run `hermes mcp test clawlink` to verify.
 
-After setup, run `/reload-mcp` in active Hermes chats — or start a fresh session — to pick up the new tools.
+After `finish`, run `/reload-mcp` in active Hermes chats — or start a fresh session — to pick up the new tools.
+
+Prefer a single blocking command in a real terminal? `hermes clawlink setup` does begin + wait + finish in one call.
 
 ## Commands
 
@@ -34,7 +41,9 @@ CLI subcommands (run from your terminal):
 
 | Command | What it does |
 | --- | --- |
-| `hermes clawlink setup` | Pair this Hermes with your ClawLink account |
+| `hermes clawlink begin` | Start pairing: print the approval link and exit (no wait) |
+| `hermes clawlink finish` | Finish pairing after you approve in the browser |
+| `hermes clawlink setup` | Pair in one blocking step (begin + wait + finish), for terminal use |
 | `hermes clawlink test` | Run `hermes mcp test clawlink` against the current config |
 | `hermes clawlink repair` | Rotate the ClawLink token and rewrite the config |
 | `hermes clawlink status` | Show whether ClawLink is configured |
@@ -43,6 +52,8 @@ In-session slash commands (use these from inside a Hermes chat):
 
 | Slash command | Equivalent |
 | --- | --- |
+| `/clawlink begin` | `hermes clawlink begin` |
+| `/clawlink finish` | `hermes clawlink finish` |
 | `/clawlink setup` | `hermes clawlink setup` |
 | `/clawlink test` | `hermes clawlink test` |
 | `/clawlink repair` | `hermes clawlink repair` |
@@ -74,7 +85,9 @@ Existing config is backed up to `config.yaml.bak.<timestamp>` before any change.
 
 - **`Hermes CLI was not found on PATH`** — the plugin is loaded but cannot run `hermes mcp test clawlink`. Make sure the `hermes` launcher is on `PATH`, then rerun setup.
 - **`The mcp Python package is not installed`** — install it into the Hermes interpreter with the command the plugin prints (`<python> -m pip install --upgrade mcp`), then rerun setup.
-- **Approval timed out / expired / canceled** — the approval link has a 15-minute lifetime. Run `hermes clawlink setup` again to generate a fresh one.
+- **`finish` says the link isn't approved yet** — approve the printed link in your browser first, then run `hermes clawlink finish` again. The saved session is kept until it expires, so retrying works.
+- **Approval timed out / expired / canceled** — the approval link has a 15-minute lifetime. Rerunning `hermes clawlink begin` before expiry resumes the same approval; after expiry it generates a fresh link.
+- **Temporary network hiccup** — short-lived ClawLink/network errors do not discard the saved session. Rerun `hermes clawlink begin` (or `finish`) before expiry to resume the same approval link.
 - **Tools do not appear after setup** — run `/reload-mcp` in your active chat, or start a new Hermes session so the tool catalog reloads.
 
 ## Development
@@ -85,7 +98,9 @@ To test locally without publishing:
 
 ```bash
 hermes plugins install /absolute/path/to/clawlink-hermes-plugin --enable
-hermes clawlink setup
+hermes clawlink begin
+# approve in the browser, then:
+hermes clawlink finish
 ```
 
 Run unit tests:
@@ -97,7 +112,8 @@ python3 -m pytest tests
 ## Security
 
 - Tokens are stored only in `~/.hermes/config.yaml` and are sent only to `https://claw-link.dev` (or the `CLAWLINK_BASE_URL` you configure for self-hosted setups).
-- The plugin makes no outbound network calls during normal Hermes operation — only during `setup`, `repair`, or `test`.
+- Setup/test logging redacts ClawLink credential values before printing command output or error details to the terminal.
+- The plugin makes no outbound network calls during normal Hermes operation — only during `begin`, `finish`, `setup`, `repair`, or `test`.
 - See [`claw-link.dev/verify`](https://claw-link.dev/verify) for build provenance.
 
 ## License
